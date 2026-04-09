@@ -1,4 +1,4 @@
-﻿[project]
+[project]
 name = "on-top-vercel-fallback"
 version = "0.1.0"
 description = "Fallback entrypoint metadata for Vercel Python detection"
