@@ -1,141 +1,179 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>On-Top 배포 게이트웨이</title>
+    <title>온톱(On-Top) | 정적 데모</title>
     <style>
       :root {
-        --bg1: #f7fbff;
-        --bg2: #e9f2ff;
-        --text: #0f172a;
-        --sub: #334155;
+        --bg: #f4f8fb;
+        --ink: #0f172a;
+        --sub: #475569;
         --card: #ffffff;
-        --line: #dbeafe;
-        --accent: #0ea5e9;
+        --line: #d9e4ef;
+        --accent: #0f766e;
+        --accent2: #f59e0b;
+        --accent3: #3b82f6;
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        color: var(--text);
         font-family: "Pretendard", "Noto Sans KR", sans-serif;
-        background: radial-gradient(circle at 10% 0%, var(--bg2), var(--bg1) 50%);
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 0% 0%, #dff5f2 0%, transparent 35%),
+          radial-gradient(circle at 100% 20%, #e7eefb 0%, transparent 40%),
+          var(--bg);
       }
       .wrap {
-        max-width: 980px;
+        max-width: 1200px;
         margin: 0 auto;
-        padding: 28px 18px 36px;
+        padding: 24px 16px 40px;
+      }
+      .hero {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 20px;
+        box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+      }
+      h1 { margin: 0; font-size: 30px; }
+      .sub { margin-top: 8px; color: var(--sub); }
+      .badge {
+        display: inline-block;
+        margin-top: 10px;
+        background: #e6fffa;
+        color: #115e59;
+        border: 1px solid #99f6e4;
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(12, 1fr);
+        gap: 12px;
+        margin-top: 14px;
       }
       .card {
         background: var(--card);
         border: 1px solid var(--line);
-        border-radius: 16px;
-        padding: 20px;
-        box-shadow: 0 8px 30px rgba(2, 132, 199, 0.08);
-      }
-      h1 {
-        margin: 0 0 10px;
-        font-size: 30px;
-        line-height: 1.25;
-      }
-      p {
-        margin: 0;
-        color: var(--sub);
-      }
-      .row {
-        display: flex;
-        gap: 8px;
-        margin-top: 16px;
-      }
-      input {
-        flex: 1;
-        border: 1px solid #cbd5e1;
-        border-radius: 10px;
-        padding: 11px 12px;
-        font-size: 14px;
-      }
-      button {
-        border: none;
-        border-radius: 10px;
-        background: var(--accent);
-        color: white;
-        font-weight: 600;
-        cursor: pointer;
-        padding: 0 14px;
-      }
-      .hint {
-        margin-top: 10px;
-        font-size: 13px;
-      }
-      iframe {
-        width: 100%;
-        min-height: 78vh;
-        border: 1px solid var(--line);
         border-radius: 14px;
-        margin-top: 16px;
-        background: #fff;
+        padding: 16px;
       }
-      .small {
-        margin-top: 10px;
-        font-size: 12px;
+      .kpi { grid-column: span 3; }
+      .w6 { grid-column: span 6; }
+      .w4 { grid-column: span 4; }
+      .w8 { grid-column: span 8; }
+      .w12 { grid-column: span 12; }
+      .title { font-size: 14px; font-weight: 700; margin: 0 0 10px; }
+      .kpi-num { font-size: 26px; font-weight: 800; margin: 0; }
+      .kpi-sub { margin: 5px 0 0; color: var(--sub); font-size: 12px; }
+      .bar-row { display: grid; grid-template-columns: 56px 1fr 48px; gap: 8px; align-items: center; margin: 8px 0; }
+      .bar { height: 10px; background: #e2e8f0; border-radius: 999px; overflow: hidden; }
+      .fill { height: 100%; background: linear-gradient(90deg, var(--accent3), var(--accent)); }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { border-bottom: 1px solid #edf2f7; padding: 8px; text-align: left; }
+      th { background: #f8fafc; }
+      .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+      .chip { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 6px 10px; font-size: 12px; }
+      .check { display: grid; gap: 8px; margin-top: 6px; }
+      .check label { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+      .footer { margin-top: 16px; color: #64748b; font-size: 12px; }
+      @media (max-width: 980px) {
+        .kpi, .w6, .w4, .w8 { grid-column: span 12; }
+        h1 { font-size: 24px; }
       }
     </style>
   </head>
   <body>
     <main class="wrap">
-      <section class="card">
-        <h1>온톱(On-Top) 서비스 연결 페이지</h1>
-        <p>Vercel에서 Streamlit 앱은 직접 실행되지 않아 404가 발생할 수 있습니다. 아래에 Streamlit 배포 URL을 입력하면 이 페이지에서 바로 연결해 사용할 수 있습니다.</p>
-
-        <div class="row">
-          <input id="url" type="url" placeholder="예: https://on-top.streamlit.app" />
-          <button id="saveBtn" type="button">연결</button>
-        </div>
-
-        <p class="hint">해커톤 권장: Streamlit Community Cloud 또는 Render에 `app.py`를 배포하고, 해당 URL을 여기에 등록하세요.</p>
-        <p class="small">입력한 주소는 이 브라우저의 localStorage에 저장됩니다.</p>
+      <section class="hero">
+        <h1>온톱(On-Top) 채용 트렌드 분석 리포트</h1>
+        <p class="sub">고용센터 상담사용 정적 데모 화면입니다. 실제 데이터 연동 없이도 핵심 분석 흐름을 즉시 보여줍니다.</p>
+        <span class="badge">Static Demo · 2026 Q2</span>
       </section>
 
-      <iframe id="appFrame" title="On-Top Streamlit App" src="about:blank"></iframe>
+      <section class="grid">
+        <article class="card kpi"><p class="title">총 분석 공고</p><p class="kpi-num">12,840</p><p class="kpi-sub">최근 5개년 누적</p></article>
+        <article class="card kpi"><p class="title">AI·데이터 우대 비중</p><p class="kpi-num">41.7%</p><p class="kpi-sub">전년 대비 +9.4%p</p></article>
+        <article class="card kpi"><p class="title">상반기 채용 집중도</p><p class="kpi-num">58%</p><p class="kpi-sub">3~5월 피크</p></article>
+        <article class="card kpi"><p class="title">핵심 지속 스킬</p><p class="kpi-num">6개</p><p class="kpi-sub">Python, SQL, 커뮤니케이션 등</p></article>
+
+        <article class="card w6">
+          <p class="title">연도별 채용 공고 수 변화</p>
+          <div class="bar-row"><span>2022</span><div class="bar"><div class="fill" style="width:42%"></div></div><strong>1.9k</strong></div>
+          <div class="bar-row"><span>2023</span><div class="bar"><div class="fill" style="width:58%"></div></div><strong>2.6k</strong></div>
+          <div class="bar-row"><span>2024</span><div class="bar"><div class="fill" style="width:73%"></div></div><strong>3.3k</strong></div>
+          <div class="bar-row"><span>2025</span><div class="bar"><div class="fill" style="width:88%"></div></div><strong>3.9k</strong></div>
+          <div class="bar-row"><span>2026</span><div class="bar"><div class="fill" style="width:100%"></div></div><strong>4.5k</strong></div>
+        </article>
+
+        <article class="card w6">
+          <p class="title">산업군별 채용 비중 추이 (2026)</p>
+          <div class="chips">
+            <span class="chip">IT 30%</span>
+            <span class="chip">금융 18%</span>
+            <span class="chip">제조 16%</span>
+            <span class="chip">바이오 12%</span>
+            <span class="chip">유통 11%</span>
+            <span class="chip">모빌리티 13%</span>
+          </div>
+          <p class="sub" style="margin-top:10px">상/하반기 패턴: 상반기 플랫폼·데이터 직군, 하반기 영업·운영 직군 확대</p>
+        </article>
+
+        <article class="card w8">
+          <p class="title">직무별 요구 역량 비교표 (Top)</p>
+          <table>
+            <thead>
+              <tr><th>직무</th><th>Top 스킬</th><th>3년 지속</th><th>신규 스킬</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>데이터분석</td><td>Python, SQL, Tableau</td><td>Python, SQL</td><td>LLM, Prompt</td></tr>
+              <tr><td>백엔드</td><td>Java, Spring, AWS</td><td>SQL, Docker</td><td>Kubernetes</td></tr>
+              <tr><td>마케팅</td><td>GA, Excel, 콘텐츠</td><td>커뮤니케이션</td><td>Marketing AI</td></tr>
+              <tr><td>인사</td><td>커뮤니케이션, HRIS</td><td>프로젝트관리</td><td>People Analytics</td></tr>
+            </tbody>
+          </table>
+        </article>
+
+        <article class="card w4">
+          <p class="title">우대사항 트렌드</p>
+          <div class="bar-row"><span>자격증</span><div class="bar"><div class="fill" style="width:67%"></div></div><strong>67%</strong></div>
+          <div class="bar-row"><span>학사 이상</span><div class="bar"><div class="fill" style="width:54%"></div></div><strong>54%</strong></div>
+          <div class="bar-row"><span>경력 3년+</span><div class="bar"><div class="fill" style="width:49%"></div></div><strong>49%</strong></div>
+          <div class="bar-row"><span>AI·데이터</span><div class="bar"><div class="fill" style="width:42%"></div></div><strong>42%</strong></div>
+        </article>
+
+        <article class="card w12">
+          <p class="title">구직자 실전 가이드 | 지금 준비할 Top 5 스킬 (데이터분석)</p>
+          <div class="check">
+            <label><input type="checkbox" /> Python 데이터 처리 (pandas, numpy)</label>
+            <label><input type="checkbox" /> SQL 실전 쿼리 + 성능 튜닝</label>
+            <label><input type="checkbox" /> BI 대시보드 제작 (Tableau/Power BI)</label>
+            <label><input type="checkbox" /> 비즈니스 문제정의와 커뮤니케이션</label>
+            <label><input type="checkbox" /> AI 분석 자동화(LLM 프롬프트 설계)</label>
+          </div>
+          <p class="sub" style="margin-top:10px">2026 전망: AI·데이터 우대 조건은 확대 추세이며, 직무별 기본기 + AI 활용능력 결합형 인재 수요가 증가할 것으로 예상됩니다.</p>
+        </article>
+
+        <article class="card w12">
+          <p class="title">원데이터 요약 테이블 (샘플)</p>
+          <table>
+            <thead>
+              <tr><th>기업</th><th>산업군</th><th>직무</th><th>공고일</th><th>주요 스킬</th><th>우대사항</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>네오전자</td><td>IT</td><td>백엔드</td><td>2026-03-11</td><td>Java, Spring, AWS</td><td>정보처리기사, 경력 3년</td></tr>
+              <tr><td>한빛금융</td><td>금융</td><td>데이터분석</td><td>2026-02-18</td><td>Python, SQL, Tableau</td><td>석사 우대, AI 프로젝트</td></tr>
+              <tr><td>블루리테일</td><td>유통</td><td>마케팅</td><td>2026-01-29</td><td>GA, 콘텐츠, Excel</td><td>경력 2년, 커뮤니케이션</td></tr>
+            </tbody>
+          </table>
+        </article>
+      </section>
+
+      <p class="footer">본 화면은 정적 데모입니다. 실제 분석 버전은 Streamlit/CSV 업로드와 연동해 동일 구조로 확장할 수 있습니다.</p>
     </main>
-
-    <script>
-      const key = "on_top_streamlit_url";
-      const input = document.getElementById("url");
-      const frame = document.getElementById("appFrame");
-      const btn = document.getElementById("saveBtn");
-
-      function normalize(url) {
-        if (!url) return "";
-        const t = url.trim();
-        if (t.startsWith("http://") || t.startsWith("https://")) return t;
-        return "https://" + t;
-      }
-
-      function applyUrl(url) {
-        const safe = normalize(url);
-        if (!safe) {
-          frame.src = "about:blank";
-          return;
-        }
-        frame.src = safe;
-      }
-
-      const saved = localStorage.getItem(key) || "";
-      if (saved) {
-        input.value = saved;
-        applyUrl(saved);
-      }
-
-      btn.addEventListener("click", () => {
-        const v = normalize(input.value);
-        if (!v) {
-          alert("Streamlit 배포 URL을 입력해주세요.");
-          return;
-        }
-        localStorage.setItem(key, v);
-        applyUrl(v);
-      });
-    </script>
   </body>
 </html>
