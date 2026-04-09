@@ -1,702 +1,550 @@
 ﻿import os
 import re
-from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from datetime import datetime
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 
+# Optional dependency for word cloud; app falls back gracefully when unavailable.
+try:
+    from wordcloud import WordCloud
+    import matplotlib.pyplot as plt
+
+    WORDCLOUD_AVAILABLE = True
+except Exception:
+    WORDCLOUD_AVAILABLE = False
+
+
+# ==============================
 # [Context & Goal]
-# 이 앱은 "고용센터 상담사"가 여러 기업의 채용공고 데이터를 빠르게 해석해
-# 내담자 맞춤형 상담 인사이트를 만드는 목적의 데모 대시보드입니다.
-# 단순 시각화가 아니라 "상담 의사결정"에 바로 쓰일 수 있도록 섹션을 구성합니다.
+# This app is designed for employment center counselors who need quick,
+# reliable insights from hiring postings to guide job seekers.
+# ==============================
 
+st.set_page_config(page_title="온톱 (On-Top)", page_icon="📈", layout="wide")
+
+st.title("온톱 (On-Top) - 채용 트렌드/역량 분석 대시보드")
+st.caption("고용센터 상담사가 공고 데이터를 업로드하면 트렌드와 실전 컨설팅 인사이트를 즉시 확인할 수 있습니다.")
+
+
+# ==============================
 # [Tech Stack & Constraints]
-# - Python, Streamlit, Pandas, Plotly 중심 경량 구성
-# - 민감정보(API Key)는 하드코딩하지 않고 st.secrets / os.getenv 사용 원칙
-# - 외부 의존성 실패 시 앱이 멈추지 않도록 예외 방어
+# - Python / Streamlit / Pandas / Plotly
+# - Optional: WordCloud
+# - Sensitive values: use st.secrets or os.getenv (no hardcoded keys)
+# ==============================
 
-st.set_page_config(page_title="온톱(On-Top) 채용 인사이트", page_icon="📈", layout="wide")
+REQUIRED_COLUMNS_GUIDE = [
+    "company",
+    "group",
+    "industry",
+    "division",
+    "job_category",
+    "posting_date",
+    "title",
+    "description",
+    "preferred",
+]
+
+DEFAULT_SKILL_DICT = [
+    "python", "sql", "excel", "power bi", "tableau", "r", "java", "spring", "react", "node.js",
+    "aws", "gcp", "azure", "docker", "kubernetes", "spark", "hadoop", "llm", "prompt",
+    "머신러닝", "딥러닝", "데이터분석", "통계", "커뮤니케이션", "문제해결", "프로젝트관리",
+    "영상편집", "마케팅", "영업", "회계", "재무", "인사", "총무", "생산관리", "품질관리",
+    "c", "c++", "go", "typescript", "figma", "photoshop", "cad", "전기기사", "정보처리기사",
+]
+
+CERT_KEYWORDS = ["기사", "cert", "자격", "toeic", "opic", "cpa", "cfa", "정보처리", "adsp", "sqld"]
+EDU_KEYWORDS = ["학사", "석사", "박사", "대졸", "전문학사", "고졸", "mba"]
+AI_DATA_KEYWORDS = ["ai", "데이터", "머신러닝", "딥러닝", "llm", "analytics", "analysis", "ml"]
 
 
-@dataclass
-class ColumnMap:
-    posting_date: str = "posting_date"
-    company: str = "company"
-    group: str = "group"
-    industry: str = "industry"
-    division: str = "division"
-    job_category: str = "job_category"
-    job_title: str = "job_title"
-    required_skills: str = "required_skills"
-    preferred_text: str = "preferred_text"
-    education: str = "education"
-    experience_years: str = "experience_years"
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    mapper = {c: c.strip().lower() for c in df.columns}
+    df = df.rename(columns=mapper)
 
-
-def inject_demo_data() -> pd.DataFrame:
-    """해커톤 데모를 위한 샘플 데이터를 생성합니다."""
-    rng = np.random.default_rng(42)
-    years = [2023, 2024, 2025, 2026]
-    industries = ["IT", "금융", "제조", "헬스케어", "유통"]
-    divisions = ["플랫폼", "데이터", "서비스", "영업", "운영"]
-    job_categories = ["백엔드", "프론트엔드", "데이터", "AI", "기획", "마케팅"]
-    groups = ["Alpha그룹", "Beta그룹", "Gamma그룹", "Delta그룹"]
-
-    skill_pool = {
-        "백엔드": ["Python", "Java", "Spring", "SQL", "AWS", "Docker", "Kubernetes"],
-        "프론트엔드": ["JavaScript", "TypeScript", "React", "Vue", "CSS", "Next.js"],
-        "데이터": ["SQL", "Python", "Tableau", "Pandas", "ETL", "Spark"],
-        "AI": ["Python", "PyTorch", "TensorFlow", "LLM", "MLOps", "데이터분석"],
-        "기획": ["커뮤니케이션", "문제해결", "GA", "A/B테스트", "서비스기획"],
-        "마케팅": ["콘텐츠", "퍼포먼스", "GA", "CRM", "데이터분석", "브랜딩"],
+    alias_map = {
+        "기업명": "company",
+        "회사명": "company",
+        "대기업그룹": "group",
+        "산업군": "industry",
+        "사업부": "division",
+        "직무": "job_category",
+        "채용일": "posting_date",
+        "공고일": "posting_date",
+        "공고제목": "title",
+        "본문": "description",
+        "우대사항": "preferred",
     }
+    for k, v in alias_map.items():
+        if k in df.columns and v not in df.columns:
+            df[v] = df[k]
 
-    cert_tokens = ["정보처리기사", "SQLD", "ADsP", "PMP", "없음"]
-    edu_tokens = ["학력무관", "학사", "석사", "박사"]
-
-    rows = []
-    for _ in range(700):
-        y = int(rng.choice(years, p=[0.2, 0.25, 0.27, 0.28]))
-        month = int(rng.integers(1, 13))
-        day = int(rng.integers(1, 28))
-        industry = str(rng.choice(industries))
-        division = str(rng.choice(divisions))
-        category = str(rng.choice(job_categories))
-        group = str(rng.choice(groups))
-        company = f"{group}-{industry}-{rng.integers(1, 25)}"
-
-        base_skills = skill_pool[category]
-        k = int(rng.integers(3, 6))
-        skills = list(rng.choice(base_skills, size=k, replace=False))
-
-        if y >= 2025 and category in ["AI", "데이터", "백엔드"] and rng.random() > 0.45:
-            skills.append("Generative AI")
-        if y >= 2026 and rng.random() > 0.55:
-            skills.append("Agentic Workflow")
-
-        cert = str(rng.choice(cert_tokens, p=[0.2, 0.22, 0.2, 0.1, 0.28]))
-        edu = str(rng.choice(edu_tokens, p=[0.3, 0.45, 0.2, 0.05]))
-        exp = int(rng.integers(0, 8))
-
-        pref_fragments = [
-            f"우대: {cert}",
-            f"학력: {edu}",
-            f"경력 {exp}년 이상",
-        ]
-        if y >= 2025 and rng.random() > 0.35:
-            pref_fragments.append("AI/데이터 프로젝트 경험")
-        if category == "AI" and rng.random() > 0.5:
-            pref_fragments.append("머신러닝 모델 배포 경험")
-
-        rows.append(
-            {
-                "posting_date": f"{y}-{month:02d}-{day:02d}",
-                "company": company,
-                "group": group,
-                "industry": industry,
-                "division": division,
-                "job_category": category,
-                "job_title": f"{category} 담당자",
-                "required_skills": ", ".join(skills),
-                "preferred_text": " / ".join(pref_fragments),
-                "education": edu,
-                "experience_years": exp,
-            }
-        )
-
-    return pd.DataFrame(rows)
+    return df
 
 
-def safe_read_uploaded(file) -> pd.DataFrame:
-    """CSV/XLSX 업로드를 안전하게 읽고 실패 시 빈 DF를 반환합니다."""
-    if file is None:
-        return pd.DataFrame()
-
+def parse_date_safe(value: object) -> Optional[pd.Timestamp]:
+    if pd.isna(value):
+        return None
     try:
-        if file.name.lower().endswith(".csv"):
-            return pd.read_csv(file)
-        if file.name.lower().endswith((".xlsx", ".xls")):
-            return pd.read_excel(file)
-        st.warning("지원하지 않는 파일 형식입니다. CSV 또는 XLSX를 사용해주세요.")
-        return pd.DataFrame()
-    except Exception as e:
-        st.warning(f"파일을 읽는 중 오류가 발생했습니다: {e}")
-        return pd.DataFrame()
-
-
-def standardize_columns(df: pd.DataFrame, cmap: ColumnMap) -> pd.DataFrame:
-    """컬럼 누락에 대비해 기본 컬럼을 만들고 타입을 정리합니다."""
-    out = df.copy()
-
-    required = [
-        cmap.posting_date,
-        cmap.company,
-        cmap.group,
-        cmap.industry,
-        cmap.division,
-        cmap.job_category,
-        cmap.job_title,
-        cmap.required_skills,
-        cmap.preferred_text,
-        cmap.education,
-        cmap.experience_years,
-    ]
-
-    for col in required:
-        if col not in out.columns:
-            out[col] = ""
-
-    out[cmap.posting_date] = pd.to_datetime(out[cmap.posting_date], errors="coerce")
-    out["year"] = out[cmap.posting_date].dt.year
-    out["month"] = out[cmap.posting_date].dt.month
-    out["half"] = np.where(out["month"].between(1, 6), "상반기", "하반기")
-
-    out[cmap.experience_years] = pd.to_numeric(out[cmap.experience_years], errors="coerce")
-    out[cmap.experience_years] = out[cmap.experience_years].fillna(0)
-
-    text_cols = [
-        cmap.company,
-        cmap.group,
-        cmap.industry,
-        cmap.division,
-        cmap.job_category,
-        cmap.job_title,
-        cmap.required_skills,
-        cmap.preferred_text,
-        cmap.education,
-    ]
-
-    for c in text_cols:
-        out[c] = out[c].fillna("").astype(str)
-
-    out = out.dropna(subset=["year"])
-    out["year"] = out["year"].astype(int)
-    out["month"] = out["month"].fillna(0).astype(int)
-
-    return out
-
-
-def tokenize_skills(series: pd.Series) -> List[str]:
-    tokens: List[str] = []
-    for txt in series.fillna("").astype(str):
-        parts = re.split(r"[,/|;\n]", txt)
-        for p in parts:
-            t = p.strip()
-            if not t:
-                continue
-            if len(t) <= 1:
-                continue
-            tokens.append(t)
-    return tokens
-
-
-def extract_skill_frame(df: pd.DataFrame, cmap: ColumnMap) -> pd.DataFrame:
-    rows = []
-    for _, r in df.iterrows():
-        parts = re.split(r"[,/|;\n]", str(r[cmap.required_skills]))
-        for p in parts:
-            s = p.strip()
-            if s:
-                rows.append(
-                    {
-                        "year": r["year"],
-                        "industry": r[cmap.industry],
-                        "job_category": r[cmap.job_category],
-                        "skill": s,
-                    }
-                )
-    return pd.DataFrame(rows)
-
-
-def build_wordcloud(tokens: List[str]):
-    """wordcloud 라이브러리가 없을 때는 None을 반환해 대체 UI를 사용합니다."""
-    try:
-        from wordcloud import WordCloud
-        import matplotlib.pyplot as plt
-
-        freq = pd.Series(tokens).value_counts().to_dict()
-        wc = WordCloud(width=1200, height=500, background_color="white").generate_from_frequencies(freq)
-        fig, ax = plt.subplots(figsize=(12, 4))
-        ax.imshow(wc, interpolation="bilinear")
-        ax.axis("off")
-        return fig
+        return pd.to_datetime(value, errors="coerce")
     except Exception:
         return None
 
 
-def ai_data_preference_flag(text: str) -> int:
-    pattern = r"(AI|인공지능|데이터|머신러닝|딥러닝|LLM)"
-    return int(bool(re.search(pattern, str(text), flags=re.IGNORECASE)))
+def infer_half(dt: pd.Timestamp) -> str:
+    if pd.isna(dt):
+        return "미상"
+    return "상반기" if dt.month <= 6 else "하반기"
 
 
-def education_bucket(text: str) -> str:
-    t = str(text)
-    if re.search(r"박사", t):
-        return "박사"
-    if re.search(r"석사", t):
-        return "석사"
-    if re.search(r"학사|대졸", t):
-        return "학사"
-    if re.search(r"무관", t):
-        return "학력무관"
-    return "기타"
-
-
-def certifications_flag(text: str) -> int:
-    return int(bool(re.search(r"(자격증|기사|SQLD|ADsP|PMP|license|cert)", str(text), re.IGNORECASE)))
-
-
-def build_2026_outlook(df: pd.DataFrame, skill_df: pd.DataFrame, cmap: ColumnMap) -> str:
-    latest_year = int(df["year"].max()) if not df.empty else 2026
-
-    ai_rate_by_year = (
-        df.groupby("year")["ai_data_pref"].mean().reset_index().sort_values("year") if not df.empty else pd.DataFrame()
-    )
-    ai_msg = "AI·데이터 우대 증가가 관찰되지 않았습니다."
-    if len(ai_rate_by_year) >= 2:
-        delta = (ai_rate_by_year.iloc[-1]["ai_data_pref"] - ai_rate_by_year.iloc[-2]["ai_data_pref"]) * 100
-        if delta > 0:
-            ai_msg = f"AI·데이터 우대 비중이 전년 대비 {delta:.1f}%p 상승했습니다."
-        else:
-            ai_msg = f"AI·데이터 우대 비중이 전년 대비 {abs(delta):.1f}%p 하락/정체했습니다."
-
-    top_skills = "데이터 부족"
-    if not skill_df.empty:
-        recent = skill_df[skill_df["year"] == latest_year]
-        if recent.empty:
-            recent = skill_df
-        top_skills = ", ".join(recent["skill"].value_counts().head(5).index.tolist())
-
-    return (
-        f"2026 전망: 최근 데이터 기준으로 기업의 채용 공고는 디지털/데이터 중심 역량을 계속 요구하는 흐름입니다. "
-        f"{ai_msg} 특히 {top_skills} 역량의 우선순위가 높아, 구직자는 포트폴리오와 실무 프로젝트 증빙을 함께 준비하는 전략이 유효합니다."
-    )
-
-
-def recommend_adjacent_jobs(
-    skill_df: pd.DataFrame,
-    context_df: pd.DataFrame,
-    target_job: str,
-    latest_year: int,
-    industry_weight: float = 0.25,
-) -> List[Dict[str, str]]:
-    """
-    지원 직무와 공통 스킬이 많은 인접 직무를 1~3순위로 추천합니다.
-    점수 = 스킬 유사도 + 산업군 일치 가중치.
-    - 스킬 유사도: Jaccard(교집합/합집합) + 공통 스킬 수 보정
-    - 산업군 일치도: 직무별 산업군 분포 코사인 유사도
-    """
-    if skill_df.empty:
+def tokenize_text(text: str) -> List[str]:
+    if not isinstance(text, str):
         return []
+    cleaned = re.sub(r"[^0-9a-zA-Z가-힣+.#\-\s]", " ", text.lower())
+    tokens = [t.strip() for t in cleaned.split() if len(t.strip()) >= 2]
+    return tokens
 
-    year_scope = skill_df[skill_df["year"] == latest_year].copy()
-    if year_scope.empty:
-        year_scope = skill_df.copy()
 
-    job_skill_map: Dict[str, set] = (
-        year_scope.groupby("job_category")["skill"].apply(lambda s: set(s.dropna().astype(str))).to_dict()
-    )
+def extract_skills_from_text(text: str, skill_dict: List[str]) -> Set[str]:
+    text_l = text.lower() if isinstance(text, str) else ""
+    found = set()
+    for skill in skill_dict:
+        s = skill.lower()
+        if s in text_l:
+            found.add(skill)
+    return found
 
-    target_skills = job_skill_map.get(target_job, set())
-    if not target_skills:
-        target_skills = set(
-            skill_df.loc[skill_df["job_category"] == target_job, "skill"].dropna().astype(str).tolist()
-        )
 
-    if not target_skills:
-        return []
+def safe_ai_refine_skills(raw_text: str, initial_skills: Set[str]) -> Set[str]:
+    """
+    [Edge Case Handling]
+    AI API is optional. If key or request fails, we return initial_skills.
+    This prevents demo-breaking red screens.
+    """
+    provider = os.getenv("AI_PROVIDER", "") or st.secrets.get("AI_PROVIDER", "") if hasattr(st, "secrets") else ""
+    _ = provider
+    # Placeholder for Claude/Gemini integration. Intentionally no external call by default.
+    try:
+        return initial_skills
+    except Exception:
+        return initial_skills
 
-    # 산업군 일치도 계산용 데이터 구성
-    ind_scope = context_df[context_df["year"] == latest_year].copy()
-    if ind_scope.empty:
-        ind_scope = context_df.copy()
 
-    industry_sim_map: Dict[str, float] = {}
-    if not ind_scope.empty and "job_category" in ind_scope.columns and "industry" in ind_scope.columns:
-        ind_pivot = (
-            ind_scope.groupby(["job_category", "industry"])
-            .size()
-            .reset_index(name="count")
-            .pivot(index="job_category", columns="industry", values="count")
-            .fillna(0)
-        )
+@st.cache_data
+def create_sample_data(n: int = 320) -> pd.DataFrame:
+    rng = np.random.default_rng(42)
+    years = rng.choice([2022, 2023, 2024, 2025, 2026], size=n, p=[0.16, 0.18, 0.22, 0.24, 0.20])
+    months = rng.integers(1, 13, size=n)
 
-        if target_job in ind_pivot.index:
-            target_vec = ind_pivot.loc[target_job].to_numpy(dtype=float)
-            target_norm = float(np.linalg.norm(target_vec))
-            for job in ind_pivot.index.tolist():
-                cand_vec = ind_pivot.loc[job].to_numpy(dtype=float)
-                cand_norm = float(np.linalg.norm(cand_vec))
-                if target_norm == 0 or cand_norm == 0:
-                    industry_sim_map[job] = 0.0
-                else:
-                    sim = float(np.dot(target_vec, cand_vec) / (target_norm * cand_norm))
-                    industry_sim_map[job] = max(0.0, min(1.0, sim))
+    companies = ["네오전자", "한빛금융", "스카이모빌리티", "휴먼바이오", "블루리테일", "퀀텀소프트"]
+    groups = ["네오그룹", "한빛그룹", "스카이그룹", "휴먼그룹", "블루그룹", "퀀텀그룹"]
+    industries = ["IT", "금융", "제조", "바이오", "유통", "모빌리티"]
+    divisions = ["플랫폼", "데이터", "영업", "마케팅", "R&D", "운영"]
+    jobs = ["데이터분석", "백엔드", "프론트엔드", "영업관리", "마케팅", "품질관리", "인사"]
 
-    scored: List[Tuple[str, float, List[str]]] = []
-    for job, skills in job_skill_map.items():
-        if job == target_job or not skills:
-            continue
-        inter = target_skills & skills
-        union = target_skills | skills
-        if not union:
-            continue
-        jaccard = len(inter) / len(union)
-        skill_score = jaccard + (len(inter) * 0.01)
-        industry_score = industry_sim_map.get(job, 0.0)
-        final_score = (1.0 - industry_weight) * skill_score + industry_weight * industry_score
-        scored.append((job, final_score, sorted(list(inter))[:5], industry_score))
+    skill_templates = {
+        "데이터분석": "Python SQL 데이터분석 통계 Tableau",
+        "백엔드": "Java Spring SQL AWS Docker",
+        "프론트엔드": "React TypeScript Figma 커뮤니케이션",
+        "영업관리": "Excel 커뮤니케이션 문제해결 영업",
+        "마케팅": "마케팅 데이터분석 Excel 커뮤니케이션",
+        "품질관리": "품질관리 통계 Excel 문제해결",
+        "인사": "인사 커뮤니케이션 Excel 프로젝트관리",
+    }
 
-    scored.sort(key=lambda x: x[1], reverse=True)
-    top3 = scored[:3]
-    result = []
-    for rank, (job, score, common_skills, industry_score) in enumerate(top3, start=1):
-        result.append(
+    rows = []
+    for i in range(n):
+        job = rng.choice(jobs)
+        y = int(years[i])
+        m = int(months[i])
+        d = int(rng.integers(1, 28))
+        dt = datetime(y, m, d)
+
+        c_idx = int(rng.integers(0, len(companies)))
+        company = companies[c_idx]
+        group = groups[c_idx]
+        industry = industries[c_idx]
+
+        base_desc = skill_templates[job]
+        if y >= 2025 and rng.random() < 0.45:
+            base_desc += " AI LLM"
+        if y <= 2023 and rng.random() < 0.25:
+            base_desc = base_desc.replace("LLM", "")
+
+        preferred = "우대: "
+        preferred += rng.choice([
+            "정보처리기사 보유자", "석사 학위 보유", "경력 3년 이상", "TOEIC 800 이상",
+            "AI 프로젝트 경험", "데이터 파이프라인 구축 경험", "관련 자격증 보유",
+        ])
+
+        rows.append(
             {
-                "rank": f"{rank}순위",
-                "job": job,
-                "score": f"{score:.2f}",
-                "industry_match": f"{industry_score:.2f}",
-                "common_skills": ", ".join(common_skills) if common_skills else "-",
+                "company": company,
+                "group": group,
+                "industry": industry,
+                "division": rng.choice(divisions),
+                "job_category": job,
+                "posting_date": dt.strftime("%Y-%m-%d"),
+                "title": f"[{company}] {job} 채용",
+                "description": f"담당업무 및 자격요건: {base_desc}",
+                "preferred": preferred,
             }
         )
-    return result
+
+    return pd.DataFrame(rows)
 
 
-# [Step-by-step Logic]
-# 1) 데이터 추출/정제 -> 2) 역량/우대 분석용 파생변수 생성 -> 3) 섹션별 시각화 -> 4) 상담 사용용 체크리스트 출력
+def prepare_df(raw_df: pd.DataFrame) -> pd.DataFrame:
+    df = normalize_columns(raw_df.copy())
 
-def main() -> None:
-    st.title("온톱(On-Top) 채용 인사이트 대시보드")
-    st.caption("고용센터 상담사의 빠른 의사결정을 위한 채용 트렌드/역량 분석 데모")
+    for col in ["company", "group", "industry", "division", "job_category", "title", "description", "preferred"]:
+        if col not in df.columns:
+            df[col] = "미상"
 
-    with st.sidebar:
-        st.subheader("데이터 입력")
-        uploaded = st.file_uploader("채용 공고 데이터 업로드 (CSV/XLSX)", type=["csv", "xlsx", "xls"])
-        use_demo = st.toggle("샘플 데이터 사용", value=True)
+    if "posting_date" not in df.columns:
+        df["posting_date"] = pd.NaT
 
-        st.markdown("---")
-        st.subheader("필터")
-
-    raw = safe_read_uploaded(uploaded)
-    if raw.empty and use_demo:
-        raw = inject_demo_data()
-
-    if raw.empty:
-        st.warning("분석할 데이터가 없습니다. 파일을 업로드하거나 샘플 데이터를 켜주세요.")
-        return
-
-    cmap = ColumnMap()
-
-    try:
-        df = standardize_columns(raw, cmap)
-    except Exception as e:
-        st.error(f"데이터 정제 중 오류가 발생했습니다: {e}")
-        return
+    df["posting_dt"] = df["posting_date"].apply(parse_date_safe)
+    df = df[df["posting_dt"].notna()].copy()
 
     if df.empty:
-        st.warning("유효한 날짜가 없어 분석할 수 없습니다. posting_date 컬럼을 확인해주세요.")
+        return df
+
+    df["year"] = df["posting_dt"].dt.year.astype(int)
+    df["month"] = df["posting_dt"].dt.month.astype(int)
+    df["half"] = df["posting_dt"].apply(infer_half)
+
+    full_text = (df["title"].fillna("") + " " + df["description"].fillna("") + " " + df["preferred"].fillna(""))
+    df["skills"] = full_text.apply(lambda t: list(safe_ai_refine_skills(t, extract_skills_from_text(t, DEFAULT_SKILL_DICT))))
+
+    def classify_pref(pref_text: str) -> Tuple[int, int, float, int]:
+        t = pref_text.lower() if isinstance(pref_text, str) else ""
+        cert = int(any(k in t for k in CERT_KEYWORDS))
+        edu = int(any(k in t for k in EDU_KEYWORDS))
+        ai_data = int(any(k in t for k in AI_DATA_KEYWORDS))
+
+        exp_match = re.search(r"경력\s*(\d+)\s*년", t)
+        exp_years = float(exp_match.group(1)) if exp_match else np.nan
+        return cert, edu, exp_years, ai_data
+
+    pref_features = df["preferred"].apply(classify_pref)
+    df["pref_cert"], df["pref_edu"], df["pref_exp_years"], df["pref_ai_data"] = zip(*pref_features)
+
+    return df
+
+
+def skill_year_presence(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=["year", "skill", "count"])
+
+    rows = []
+    for _, r in df[["year", "skills"]].iterrows():
+        skills = r["skills"] if isinstance(r["skills"], list) else []
+        for s in skills:
+            rows.append((r["year"], s))
+
+    if not rows:
+        return pd.DataFrame(columns=["year", "skill", "count"])
+
+    out = pd.DataFrame(rows, columns=["year", "skill"])
+    out = out.groupby(["year", "skill"], as_index=False).size().rename(columns={"size": "count"})
+    return out
+
+
+def render_wordcloud(skill_counts: pd.DataFrame) -> None:
+    st.subheader("전체 공고 Top 키워드 (워드클라우드)")
+
+    if skill_counts.empty:
+        st.info("표시할 키워드가 없습니다.")
         return
 
-    with st.sidebar:
-        years = sorted(df["year"].dropna().unique().tolist())
-        selected_years = st.multiselect("연도", years, default=years)
-
-        inds = sorted(df[cmap.industry].unique().tolist())
-        selected_inds = st.multiselect("산업군", inds, default=inds)
-
-        jobs = sorted(df[cmap.job_category].unique().tolist())
-        selected_jobs = st.multiselect("직무", jobs, default=jobs)
-
-    fdf = df[
-        (df["year"].isin(selected_years))
-        & (df[cmap.industry].isin(selected_inds))
-        & (df[cmap.job_category].isin(selected_jobs))
-    ].copy()
-
-    if fdf.empty:
-        st.warning("필터 결과가 없습니다. 필터 조건을 완화해주세요.")
+    if not WORDCLOUD_AVAILABLE:
+        st.warning("`wordcloud` 또는 `matplotlib`가 설치되지 않아 막대 차트로 대체합니다.")
+        fig = px.bar(skill_counts.head(20), x="skill", y="count", title="Top Skill Keywords")
+        st.plotly_chart(fig, use_container_width=True)
         return
 
-    fdf["ai_data_pref"] = fdf[cmap.preferred_text].apply(ai_data_preference_flag)
-    fdf["cert_flag"] = fdf[cmap.preferred_text].apply(certifications_flag)
-    fdf["edu_bucket"] = fdf[cmap.education].apply(education_bucket)
+    freq = {r["skill"]: int(r["count"]) for _, r in skill_counts.iterrows()}
+    try:
+        wc = WordCloud(width=1200, height=500, background_color="white", colormap="viridis").generate_from_frequencies(freq)
+        fig, ax = plt.subplots(figsize=(14, 6))
+        ax.imshow(wc, interpolation="bilinear")
+        ax.axis("off")
+        st.pyplot(fig)
+    except Exception as e:
+        st.warning(f"워드클라우드 생성 중 문제가 발생했습니다: {e}")
 
-    skill_df = extract_skill_frame(fdf, cmap)
 
-    st.markdown("## 채용 트렌드 Overview")
+def section_overview(df: pd.DataFrame) -> None:
+    st.header("1) 채용 트렌드 Overview")
+
     c1, c2 = st.columns(2)
 
     with c1:
-        y_count = fdf.groupby("year").size().reset_index(name="count")
-        fig = px.bar(y_count, x="year", y="count", text="count", title="연도별 채용 공고 수 변화")
-        fig.update_layout(xaxis_title="연도", yaxis_title="공고 수")
+        yearly = df.groupby("year", as_index=False).size().rename(columns={"size": "posting_count"})
+        fig = px.bar(yearly, x="year", y="posting_count", title="연도별 채용 공고 수 변화")
         st.plotly_chart(fig, use_container_width=True)
 
     with c2:
-        ind_share = fdf.groupby(["year", cmap.industry]).size().reset_index(name="count")
-        total = ind_share.groupby("year")["count"].transform("sum")
-        ind_share["share"] = ind_share["count"] / total
-        fig = px.area(
-            ind_share,
-            x="year",
-            y="share",
-            color=cmap.industry,
-            title="산업군별 채용 비중 추이",
-            groupnorm="percent",
-        )
-        fig.update_layout(yaxis_title="비중(%)")
+        by_industry = df.groupby(["year", "industry"], as_index=False).size().rename(columns={"size": "cnt"})
+        total_per_year = by_industry.groupby("year")["cnt"].transform("sum")
+        by_industry["ratio"] = by_industry["cnt"] / total_per_year
+        fig = px.area(by_industry, x="year", y="ratio", color="industry", groupnorm="fraction", title="산업군별 채용 비중 추이")
         st.plotly_chart(fig, use_container_width=True)
 
     c3, c4 = st.columns(2)
+
     with c3:
-        half_div = fdf.groupby(["year", "half", cmap.division]).size().reset_index(name="count")
-        fig = px.bar(
-            half_div,
-            x="year",
-            y="count",
-            color="half",
-            barmode="group",
-            facet_col=cmap.division,
-            facet_col_wrap=3,
-            title="연도별 상/하반기 사업부별 채용 추이",
-        )
+        yhd = df.groupby(["year", "half", "division"], as_index=False).size().rename(columns={"size": "cnt"})
+        yhd["year_half"] = yhd["year"].astype(str) + "-" + yhd["half"]
+        fig = px.bar(yhd, x="year_half", y="cnt", color="division", barmode="group", title="연도별 상/하반기 사업부별 채용 추이")
         st.plotly_chart(fig, use_container_width=True)
 
     with c4:
-        job_trend = fdf.groupby(["year", cmap.job_category]).size().reset_index(name="count")
-        fig = px.line(job_trend, x="year", y="count", color=cmap.job_category, markers=True, title="직무 종류 변화 추이")
+        job_trend = df.groupby(["year", "job_category"], as_index=False).size().rename(columns={"size": "cnt"})
+        fig = px.line(job_trend, x="year", y="cnt", color="job_category", markers=True, title="직무 종류 변화 추이")
         st.plotly_chart(fig, use_container_width=True)
 
-    season = fdf.groupby(["half", "month"]).size().reset_index(name="count")
-    if not season.empty:
-        pivot = season.pivot(index="half", columns="month", values="count").fillna(0)
-        fig = go.Figure(
-            data=go.Heatmap(
-                z=pivot.values,
-                x=[str(m) for m in pivot.columns.tolist()],
-                y=pivot.index.tolist(),
-                colorscale="Blues",
-            )
-        )
-        fig.update_layout(title="상/하반기 채용 시즌 패턴", xaxis_title="월", yaxis_title="반기")
-        st.plotly_chart(fig, use_container_width=True)
+    season = df.groupby(["half", "month"], as_index=False).size().rename(columns={"size": "cnt"})
+    fig = px.bar(season, x="month", y="cnt", color="half", barmode="group", title="상/하반기 채용 시즌 패턴")
+    st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("## 직무별 요구 역량 분석")
-    wc_col, top_col = st.columns([1.2, 1])
 
-    all_tokens = tokenize_skills(fdf[cmap.required_skills])
+def section_skill_analysis(df: pd.DataFrame) -> None:
+    st.header("2) 직무별 요구 역량 분석")
 
-    with wc_col:
-        st.subheader("전체 공고 Top 키워드")
-        wc_fig = build_wordcloud(all_tokens)
-        if wc_fig is not None:
-            st.pyplot(wc_fig, clear_figure=True)
-        else:
-            st.warning("워드클라우드 라이브러리 사용이 어려워 Top 키워드 막대그래프로 대체합니다.")
-            top_keywords = pd.Series(all_tokens).value_counts().head(20).reset_index()
-            top_keywords.columns = ["skill", "count"]
-            fig = px.bar(top_keywords, x="skill", y="count", title="Top 키워드")
-            st.plotly_chart(fig, use_container_width=True)
+    sy = skill_year_presence(df)
+    total_skill = sy.groupby("skill", as_index=False)["count"].sum().sort_values("count", ascending=False)
+    render_wordcloud(total_skill)
 
-    with top_col:
-        st.subheader("3년간 꾸준히 요구된 필수 스킬")
-        if skill_df.empty:
-            st.info("스킬 데이터가 부족합니다.")
-        else:
-            recent_years = sorted(skill_df["year"].unique())[-3:]
-            yearly_sets = []
-            for y in recent_years:
-                yearly_sets.append(set(skill_df.loc[skill_df["year"] == y, "skill"].unique().tolist()))
-            common_skills = set.intersection(*yearly_sets) if yearly_sets else set()
-            if common_skills:
-                common_df = (
-                    skill_df[skill_df["skill"].isin(list(common_skills))]["skill"].value_counts().head(15).reset_index()
-                )
-                common_df.columns = ["skill", "count"]
-                st.dataframe(common_df, use_container_width=True)
-            else:
-                st.info("최근 3년 공통 스킬이 없습니다.")
+    st.subheader("3년간 꾸준히 요구된 필수 스킬")
+    years = sorted(df["year"].unique().tolist())
+    if len(years) >= 3:
+        recent3 = years[-3:]
+        each_year_skills = []
+        for y in recent3:
+            skills_y = set(sy[sy["year"] == y]["skill"].tolist())
+            each_year_skills.append(skills_y)
+        core_skills = set.intersection(*each_year_skills) if each_year_skills else set()
+        st.write(f"최근 3개년 ({recent3[0]}-{recent3[-1]}) 공통 스킬: {', '.join(sorted(core_skills)) if core_skills else '없음'}")
+    else:
+        st.info("3개년 데이터가 부족하여 꾸준한 스킬 분석이 제한됩니다.")
 
     st.subheader("연도별 신규 등장 / 사라진 스킬")
-    if not skill_df.empty:
-        years_sorted = sorted(skill_df["year"].unique().tolist())
-        records = []
-        for i in range(1, len(years_sorted)):
-            py, cy = years_sorted[i - 1], years_sorted[i]
-            prev_set = set(skill_df.loc[skill_df["year"] == py, "skill"].unique().tolist())
-            curr_set = set(skill_df.loc[skill_df["year"] == cy, "skill"].unique().tolist())
-            new_sk = ", ".join(sorted(list(curr_set - prev_set))[:10]) or "-"
-            gone_sk = ", ".join(sorted(list(prev_set - curr_set))[:10]) or "-"
-            records.append({"연도": cy, "신규 스킬(최대10)": new_sk, "사라진 스킬(최대10)": gone_sk})
-        st.dataframe(pd.DataFrame(records), use_container_width=True)
+    new_dead_rows = []
+    for i in range(1, len(years)):
+        prev_y, curr_y = years[i - 1], years[i]
+        prev_skills = set(sy[sy["year"] == prev_y]["skill"])
+        curr_skills = set(sy[sy["year"] == curr_y]["skill"])
+        new_skills = sorted(curr_skills - prev_skills)
+        dead_skills = sorted(prev_skills - curr_skills)
+        new_dead_rows.append(
+            {
+                "기준연도": curr_y,
+                "신규 등장 스킬": ", ".join(new_skills[:20]) if new_skills else "-",
+                "사라진 스킬": ", ".join(dead_skills[:20]) if dead_skills else "-",
+            }
+        )
+    st.dataframe(pd.DataFrame(new_dead_rows), use_container_width=True)
 
     st.subheader("직무 카테고리별 요구 역량 비교표")
-    if not skill_df.empty:
-        comp = (
-            skill_df.groupby(["job_category", "skill"]).size().reset_index(name="count").sort_values(["job_category", "count"], ascending=[True, False])
+    rows = []
+    for _, r in df[["job_category", "skills"]].iterrows():
+        for s in r["skills"]:
+            rows.append((r["job_category"], s))
+    if rows:
+        tmp = pd.DataFrame(rows, columns=["job_category", "skill"])
+        piv = tmp.groupby(["job_category", "skill"], as_index=False).size().rename(columns={"size": "cnt"})
+        piv = piv.pivot(index="job_category", columns="skill", values="cnt").fillna(0).astype(int)
+        st.dataframe(piv, use_container_width=True)
+    else:
+        st.info("스킬 비교를 위한 데이터가 부족합니다.")
+
+
+def section_preferred(df: pd.DataFrame) -> None:
+    st.header("3) 우대사항 트렌드")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        trend = df.groupby("year", as_index=False).agg(
+            cert_ratio=("pref_cert", "mean"),
+            edu_ratio=("pref_edu", "mean"),
+            exp_years=("pref_exp_years", "mean"),
         )
-        top_comp = comp.groupby("job_category").head(5)
-        st.dataframe(top_comp, use_container_width=True)
-
-    st.markdown("## 우대사항 트렌드")
-    p1, p2 = st.columns(2)
-
-    with p1:
-        pref_year = fdf.groupby("year").agg(
-            cert_rate=("cert_flag", "mean"),
-            avg_exp=(cmap.experience_years, "mean"),
-        ).reset_index()
-        fig = px.line(pref_year, x="year", y=["cert_rate", "avg_exp"], markers=True, title="자격증/경력 연수 요구 변화")
+        trend_long = trend.melt(id_vars=["year"], var_name="metric", value_name="value")
+        fig = px.line(trend_long, x="year", y="value", color="metric", markers=True, title="자격증 / 학력 / 경력 연수 요구 변화")
         st.plotly_chart(fig, use_container_width=True)
 
-        edu_year = fdf.groupby(["year", "edu_bucket"]).size().reset_index(name="count")
-        fig2 = px.bar(edu_year, x="year", y="count", color="edu_bucket", barmode="stack", title="연도별 학력 요구 변화")
-        st.plotly_chart(fig2, use_container_width=True)
-
-    with p2:
-        ind_pref = fdf.groupby(cmap.industry).agg(
-            cert_rate=("cert_flag", "mean"),
-            ai_data_rate=("ai_data_pref", "mean"),
-            avg_exp=(cmap.experience_years, "mean"),
-        ).reset_index()
-        st.subheader("산업군별 우대사항 차이")
-        st.dataframe(ind_pref, use_container_width=True)
-
-        ai_year = fdf.groupby("year")["ai_data_pref"].mean().reset_index(name="rate")
-        fig3 = px.bar(ai_year, x="year", y="rate", title="AI·데이터 관련 우대사항 급증 여부")
-        st.plotly_chart(fig3, use_container_width=True)
-
-    st.markdown("## 기업·산업군별 인사이트")
-    i1, i2 = st.columns(2)
-
-    with i1:
-        st.subheader("대기업 그룹사별 채용 성향 비교")
-        grp = fdf.groupby(cmap.group).agg(
-            postings=(cmap.company, "count"),
-            ai_pref_rate=("ai_data_pref", "mean"),
-            avg_exp=(cmap.experience_years, "mean"),
-        ).reset_index()
-        grp = grp.sort_values("postings", ascending=False).head(10)
-        st.dataframe(grp, use_container_width=True)
-
-    with i2:
-        st.subheader("산업군별 요구 스킬 히트맵")
-        if skill_df.empty:
-            st.info("스킬 데이터가 부족합니다.")
-        else:
-            top_skills = skill_df["skill"].value_counts().head(15).index.tolist()
-            heat = (
-                skill_df[skill_df["skill"].isin(top_skills)]
-                .groupby(["industry", "skill"])
-                .size()
-                .reset_index(name="count")
-            )
-            pivot = heat.pivot(index="industry", columns="skill", values="count").fillna(0)
-            fig = go.Figure(
-                data=go.Heatmap(
-                    z=pivot.values,
-                    x=pivot.columns.tolist(),
-                    y=pivot.index.tolist(),
-                    colorscale="YlGnBu",
-                )
-            )
-            fig.update_layout(xaxis_title="스킬", yaxis_title="산업군")
-            st.plotly_chart(fig, use_container_width=True)
-
-    st.markdown("## 구직자 실전 가이드")
-    job_pick = st.selectbox("지원 직무 선택", sorted(fdf[cmap.job_category].unique().tolist()))
-    industry_weight = st.slider(
-        "추천 점수에서 산업군 일치 가중치",
-        min_value=0.0,
-        max_value=0.8,
-        value=0.25,
-        step=0.05,
-        help="값이 높을수록 지원 직무와 산업군 분포가 유사한 직무를 더 우선 추천합니다.",
-    )
-    latest_year = int(fdf["year"].max())
-
-    if not skill_df.empty:
-        target = skill_df[(skill_df["job_category"] == job_pick) & (skill_df["year"] == latest_year)]
-        if target.empty:
-            target = skill_df[skill_df["job_category"] == job_pick]
-        top5 = target["skill"].value_counts().head(5).index.tolist()
-    else:
-        top5 = []
-
-    st.write(f"### {job_pick} 직무: 지금 준비해야 할 Top 5 스킬")
-    if top5:
-        for s in top5:
-            st.checkbox(f"{s} 관련 포트폴리오/실습 완료", value=False, key=f"chk_{job_pick}_{s}")
-    else:
-        st.info("해당 직무의 스킬 데이터가 충분하지 않습니다.")
-
-    recs = recommend_adjacent_jobs(
-        skill_df=skill_df,
-        context_df=fdf,
-        target_job=job_pick,
-        latest_year=latest_year,
-        industry_weight=industry_weight,
-    )
-    st.write("### 지원가능한 직무 추천 순위")
-    if recs:
-        rec_df = pd.DataFrame(recs)
-        one = rec_df.loc[rec_df["rank"] == "1순위", "job"].iloc[0] if (rec_df["rank"] == "1순위").any() else "-"
-        two = rec_df.loc[rec_df["rank"] == "2순위", "job"].iloc[0] if (rec_df["rank"] == "2순위").any() else "-"
-        three = rec_df.loc[rec_df["rank"] == "3순위", "job"].iloc[0] if (rec_df["rank"] == "3순위").any() else "-"
-
-        summary_row = pd.DataFrame(
-            [
-                {
-                    "지원 직무": job_pick,
-                    "지원가능 직무 1순위": one,
-                    "지원가능 직무 2순위": two,
-                    "지원가능 직무 3순위": three,
-                }
-            ]
+    with c2:
+        by_ind = df.groupby("industry", as_index=False).agg(
+            cert_ratio=("pref_cert", "mean"),
+            edu_ratio=("pref_edu", "mean"),
+            ai_data_ratio=("pref_ai_data", "mean"),
         )
-        st.dataframe(summary_row, use_container_width=True)
-        st.dataframe(
-            rec_df.rename(
-                columns={
-                    "rank": "순위",
-                    "job": "추천 직무",
-                    "score": "종합 점수",
-                    "industry_match": "산업군 일치도",
-                    "common_skills": "공통 스킬",
-                }
-            ),
-            use_container_width=True,
+        show = by_ind.melt(id_vars=["industry"], var_name="metric", value_name="ratio")
+        fig = px.bar(show, x="industry", y="ratio", color="metric", barmode="group", title="산업군별 우대사항 차이")
+        st.plotly_chart(fig, use_container_width=True)
+
+    ai_trend = df.groupby("year", as_index=False)["pref_ai_data"].mean().rename(columns={"pref_ai_data": "ai_data_preferred_ratio"})
+    fig = px.bar(ai_trend, x="year", y="ai_data_preferred_ratio", title='"AI·데이터" 관련 우대사항 급증 여부')
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def section_company_insight(df: pd.DataFrame) -> None:
+    st.header("4) 기업·산업군별 인사이트")
+
+    st.subheader("대기업 그룹사별 채용 성향 비교")
+    group_profile = df.groupby(["group", "job_category"], as_index=False).size().rename(columns={"size": "cnt"})
+    fig = px.bar(group_profile, x="group", y="cnt", color="job_category", title="그룹사별 직무 집중도")
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("산업군별 요구 스킬 히트맵")
+    rows = []
+    for _, r in df[["industry", "skills"]].iterrows():
+        for s in r["skills"]:
+            rows.append((r["industry"], s))
+    if rows:
+        tmp = pd.DataFrame(rows, columns=["industry", "skill"])
+        hm = tmp.groupby(["industry", "skill"], as_index=False).size().rename(columns={"size": "cnt"})
+        top_skills = hm.groupby("skill")["cnt"].sum().sort_values(ascending=False).head(20).index.tolist()
+        hm = hm[hm["skill"].isin(top_skills)]
+        piv = hm.pivot(index="industry", columns="skill", values="cnt").fillna(0)
+        fig = px.imshow(piv, title="산업군별 상위 스킬 히트맵", aspect="auto", color_continuous_scale="Blues")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("히트맵을 그릴 스킬 데이터가 없습니다.")
+
+
+def section_jobseeker_guide(df: pd.DataFrame) -> None:
+    st.header("5) 구직자 실전 가이드")
+
+    current_year = int(df["year"].max())
+    st.subheader(f"직무별 지금 준비해야 할 Top 5 스킬 ({current_year}년 기준)")
+
+    jobs = sorted(df["job_category"].dropna().unique().tolist())
+    selected_job = st.selectbox("직무 선택", jobs)
+
+    rows = []
+    sub = df[(df["job_category"] == selected_job) & (df["year"] == current_year)]
+    for _, r in sub[["skills"]].iterrows():
+        for s in r["skills"]:
+            rows.append(s)
+
+    if rows:
+        freq = pd.Series(rows).value_counts().head(5)
+        for skill, cnt in freq.items():
+            st.checkbox(f"{skill} (언급 {cnt}회)", value=False, key=f"check_{selected_job}_{skill}")
+    else:
+        st.info("선택한 직무의 최신 연도 스킬 데이터가 부족합니다.")
+
+    st.subheader("2026 채용 전망")
+    ai_ratio_2026 = df[df["year"] == 2026]["pref_ai_data"].mean() if (df["year"] == 2026).any() else np.nan
+    top_industry = (
+        df[df["year"] == current_year].groupby("industry").size().sort_values(ascending=False).index[0]
+        if not df.empty
+        else "미상"
+    )
+
+    if pd.isna(ai_ratio_2026):
+        전망 = (
+            "현재 데이터 기준으로 2026년은 AI/데이터 역량을 요구하는 공고가 계속 증가할 가능성이 높습니다. "
+            f"특히 {top_industry} 산업군 중심으로 데이터 활용형 직무가 확대될 것으로 보입니다."
         )
     else:
-        st.info("추천 가능한 유사 직무 데이터가 부족합니다.")
-
-    st.info(build_2026_outlook(fdf, skill_df, cmap))
-
-    st.markdown("## 참고: 원데이터 요약 테이블")
-    summary = (
-        fdf.groupby(["year", cmap.industry, cmap.job_category])
-        .agg(
-            공고수=(cmap.company, "count"),
-            평균경력연수=(cmap.experience_years, "mean"),
-            AI데이터우대비율=("ai_data_pref", "mean"),
+        전망 = (
+            f"2026년 데이터에서 AI/데이터 우대 비중은 {ai_ratio_2026:.1%}로 집계되었습니다. "
+            "상담 시 기초 데이터 리터러시 + 직무 특화 툴 역량을 함께 준비하도록 안내하는 것이 효과적입니다."
         )
-        .reset_index()
-        .sort_values(["year", "공고수"], ascending=[False, False])
-    )
-    st.dataframe(summary, use_container_width=True)
 
-    st.caption("보안 원칙: API 키 등 민감정보는 st.secrets 또는 환경변수(os.getenv)로 관리하세요.")
+    st.info(전망)
 
 
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        # [Edge Case Handling] 데모 중 치명적 중단 방지
-        st.error(f"앱 실행 중 예상치 못한 오류가 발생했습니다: {e}")
-        st.warning("데이터 형식을 확인하거나 샘플 데이터로 다시 시도해주세요.")
+def section_raw_summary(df: pd.DataFrame) -> None:
+    st.header("6) 원데이터 요약 테이블")
+    base_cols = ["company", "group", "industry", "division", "job_category", "posting_date", "half", "title", "preferred"]
+    show_cols = [c for c in base_cols if c in df.columns]
+    st.dataframe(df[show_cols].sort_values("posting_date", ascending=False), use_container_width=True, height=360)
+
+
+def sidebar_controls() -> Dict[str, object]:
+    st.sidebar.header("데이터 입력")
+    mode = st.sidebar.radio("데이터 소스", ["샘플 데이터", "파일 업로드"], index=0)
+
+    uploaded = None
+    if mode == "파일 업로드":
+        uploaded = st.sidebar.file_uploader("CSV 또는 Excel 파일", type=["csv", "xlsx"])
+
+    st.sidebar.markdown("---")
+    st.sidebar.caption("권장 컬럼")
+    st.sidebar.code(", ".join(REQUIRED_COLUMNS_GUIDE), language="text")
+
+    return {"mode": mode, "uploaded": uploaded}
+
+
+# ==============================
+# [Step-by-step Logic]
+# 1) 데이터 입력 (샘플 또는 업로드)
+# 2) 컬럼 표준화 + 날짜/반기/스킬/우대사항 파생
+# 3) 섹션별 시각화 임시 출력
+# 4) 추후 승인 시 구글시트 적재/API 확장 가능
+# ==============================
+
+
+controls = sidebar_controls()
+
+raw_df = pd.DataFrame()
+if controls["mode"] == "샘플 데이터":
+    raw_df = create_sample_data()
+else:
+    up = controls["uploaded"]
+    if up is None:
+        st.warning("파일을 업로드해주세요.")
+    else:
+        try:
+            if up.name.lower().endswith(".csv"):
+                raw_df = pd.read_csv(up)
+            else:
+                raw_df = pd.read_excel(up)
+        except Exception as e:
+            st.error(f"파일을 읽는 중 문제가 발생했습니다: {e}")
+
+if raw_df.empty:
+    st.info("표시할 데이터가 없습니다. 샘플 데이터를 사용하거나 파일을 업로드해주세요.")
+    st.stop()
+
+try:
+    df = prepare_df(raw_df)
+except Exception as e:
+    st.error(f"데이터 전처리 중 오류가 발생했습니다: {e}")
+    st.stop()
+
+if df.empty:
+    st.warning("유효한 날짜(posting_date)를 가진 데이터가 없어 분석을 진행할 수 없습니다.")
+    st.info("예: 2026-04-09 형식의 posting_date 컬럼을 확인해주세요.")
+    st.stop()
+
+# Global filters
+st.sidebar.header("분석 필터")
+years = sorted(df["year"].unique().tolist())
+selected_years = st.sidebar.multiselect("연도 선택", years, default=years)
+industries = sorted(df["industry"].dropna().unique().tolist())
+selected_industries = st.sidebar.multiselect("산업군 선택", industries, default=industries)
+
+fdf = df[df["year"].isin(selected_years) & df["industry"].isin(selected_industries)].copy()
+if fdf.empty:
+    st.warning("필터 결과가 비어 있습니다. 필터를 조정해주세요.")
+    st.stop()
+
+section_overview(fdf)
+section_skill_analysis(fdf)
+section_preferred(fdf)
+section_company_insight(fdf)
+section_jobseeker_guide(fdf)
+section_raw_summary(fdf)
+
+st.success("분석 완료: 상담사 보고/설명용 대시보드가 준비되었습니다.")
