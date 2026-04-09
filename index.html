@@ -1,0 +1,141 @@
+﻿<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>On-Top 배포 게이트웨이</title>
+    <style>
+      :root {
+        --bg1: #f7fbff;
+        --bg2: #e9f2ff;
+        --text: #0f172a;
+        --sub: #334155;
+        --card: #ffffff;
+        --line: #dbeafe;
+        --accent: #0ea5e9;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        color: var(--text);
+        font-family: "Pretendard", "Noto Sans KR", sans-serif;
+        background: radial-gradient(circle at 10% 0%, var(--bg2), var(--bg1) 50%);
+      }
+      .wrap {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 28px 18px 36px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 20px;
+        box-shadow: 0 8px 30px rgba(2, 132, 199, 0.08);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 30px;
+        line-height: 1.25;
+      }
+      p {
+        margin: 0;
+        color: var(--sub);
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        margin-top: 16px;
+      }
+      input {
+        flex: 1;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 11px 12px;
+        font-size: 14px;
+      }
+      button {
+        border: none;
+        border-radius: 10px;
+        background: var(--accent);
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+        padding: 0 14px;
+      }
+      .hint {
+        margin-top: 10px;
+        font-size: 13px;
+      }
+      iframe {
+        width: 100%;
+        min-height: 78vh;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        margin-top: 16px;
+        background: #fff;
+      }
+      .small {
+        margin-top: 10px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="card">
+        <h1>온톱(On-Top) 서비스 연결 페이지</h1>
+        <p>Vercel에서 Streamlit 앱은 직접 실행되지 않아 404가 발생할 수 있습니다. 아래에 Streamlit 배포 URL을 입력하면 이 페이지에서 바로 연결해 사용할 수 있습니다.</p>
+
+        <div class="row">
+          <input id="url" type="url" placeholder="예: https://on-top.streamlit.app" />
+          <button id="saveBtn" type="button">연결</button>
+        </div>
+
+        <p class="hint">해커톤 권장: Streamlit Community Cloud 또는 Render에 `app.py`를 배포하고, 해당 URL을 여기에 등록하세요.</p>
+        <p class="small">입력한 주소는 이 브라우저의 localStorage에 저장됩니다.</p>
+      </section>
+
+      <iframe id="appFrame" title="On-Top Streamlit App" src="about:blank"></iframe>
+    </main>
+
+    <script>
+      const key = "on_top_streamlit_url";
+      const input = document.getElementById("url");
+      const frame = document.getElementById("appFrame");
+      const btn = document.getElementById("saveBtn");
+
+      function normalize(url) {
+        if (!url) return "";
+        const t = url.trim();
+        if (t.startsWith("http://") || t.startsWith("https://")) return t;
+        return "https://" + t;
+      }
+
+      function applyUrl(url) {
+        const safe = normalize(url);
+        if (!safe) {
+          frame.src = "about:blank";
+          return;
+        }
+        frame.src = safe;
+      }
+
+      const saved = localStorage.getItem(key) || "";
+      if (saved) {
+        input.value = saved;
+        applyUrl(saved);
+      }
+
+      btn.addEventListener("click", () => {
+        const v = normalize(input.value);
+        if (!v) {
+          alert("Streamlit 배포 URL을 입력해주세요.");
+          return;
+        }
+        localStorage.setItem(key, v);
+        applyUrl(v);
+      });
+    </script>
+  </body>
+</html>
