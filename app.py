@@ -8,16 +8,6 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-# Optional dependency for word cloud; app falls back gracefully when unavailable.
-try:
-    from wordcloud import WordCloud
-    import matplotlib.pyplot as plt
-
-    WORDCLOUD_AVAILABLE = True
-except Exception:
-    WORDCLOUD_AVAILABLE = False
-
-
 # ==============================
 # [Context & Goal]
 # This app is designed for employment center counselors who need quick,
@@ -60,6 +50,7 @@ DEFAULT_SKILL_DICT = [
 CERT_KEYWORDS = ["기사", "cert", "자격", "toeic", "opic", "cpa", "cfa", "정보처리", "adsp", "sqld"]
 EDU_KEYWORDS = ["학사", "석사", "박사", "대졸", "전문학사", "고졸", "mba"]
 AI_DATA_KEYWORDS = ["ai", "데이터", "머신러닝", "딥러닝", "llm", "analytics", "analysis", "ml"]
+FREE_MAX_ROWS = 12000
 
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -99,14 +90,6 @@ def infer_half(dt: pd.Timestamp) -> str:
     if pd.isna(dt):
         return "미상"
     return "상반기" if dt.month <= 6 else "하반기"
-
-
-def tokenize_text(text: str) -> List[str]:
-    if not isinstance(text, str):
-        return []
-    cleaned = re.sub(r"[^0-9a-zA-Z가-힣+.#\-\s]", " ", text.lower())
-    tokens = [t.strip() for t in cleaned.split() if len(t.strip()) >= 2]
-    return tokens
 
 
 def extract_skills_from_text(text: str, skill_dict: List[str]) -> Set[str]:
@@ -256,27 +239,15 @@ def skill_year_presence(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def render_wordcloud(skill_counts: pd.DataFrame) -> None:
-    st.subheader("전체 공고 Top 키워드 (워드클라우드)")
+    st.subheader("전체 공고 Top 키워드 (경량 바차트)")
 
     if skill_counts.empty:
         st.info("표시할 키워드가 없습니다.")
         return
 
-    if not WORDCLOUD_AVAILABLE:
-        st.warning("`wordcloud` 또는 `matplotlib`가 설치되지 않아 막대 차트로 대체합니다.")
-        fig = px.bar(skill_counts.head(20), x="skill", y="count", title="Top Skill Keywords")
-        st.plotly_chart(fig, use_container_width=True)
-        return
-
-    freq = {r["skill"]: int(r["count"]) for _, r in skill_counts.iterrows()}
-    try:
-        wc = WordCloud(width=1200, height=500, background_color="white", colormap="viridis").generate_from_frequencies(freq)
-        fig, ax = plt.subplots(figsize=(14, 6))
-        ax.imshow(wc, interpolation="bilinear")
-        ax.axis("off")
-        st.pyplot(fig)
-    except Exception as e:
-        st.warning(f"워드클라우드 생성 중 문제가 발생했습니다: {e}")
+    # Free-tier stability: avoid heavy image rendering dependencies.
+    fig = px.bar(skill_counts.head(20), x="skill", y="count", title="Top Skill Keywords")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def section_overview(df: pd.DataFrame) -> None:
@@ -477,11 +448,12 @@ def sidebar_controls() -> Dict[str, object]:
 
     uploaded = None
     if mode == "파일 업로드":
-        uploaded = st.sidebar.file_uploader("CSV 또는 Excel 파일", type=["csv", "xlsx"])
+        uploaded = st.sidebar.file_uploader("CSV 파일", type=["csv"])
 
     st.sidebar.markdown("---")
     st.sidebar.caption("권장 컬럼")
     st.sidebar.code(", ".join(REQUIRED_COLUMNS_GUIDE), language="text")
+    st.sidebar.caption(f"무료 버전 권장: 최대 {FREE_MAX_ROWS:,}행")
 
     return {"mode": mode, "uploaded": uploaded}
 
@@ -506,16 +478,18 @@ else:
         st.warning("파일을 업로드해주세요.")
     else:
         try:
-            if up.name.lower().endswith(".csv"):
-                raw_df = pd.read_csv(up)
-            else:
-                raw_df = pd.read_excel(up)
+            raw_df = pd.read_csv(up)
         except Exception as e:
             st.error(f"파일을 읽는 중 문제가 발생했습니다: {e}")
 
 if raw_df.empty:
     st.info("표시할 데이터가 없습니다. 샘플 데이터를 사용하거나 파일을 업로드해주세요.")
     st.stop()
+
+# Free-tier memory guard: sample too-large data to keep the app responsive.
+if len(raw_df) > FREE_MAX_ROWS:
+    st.warning(f"업로드 데이터가 {len(raw_df):,}행으로 커서 상위 {FREE_MAX_ROWS:,}행만 분석합니다.")
+    raw_df = raw_df.head(FREE_MAX_ROWS).copy()
 
 try:
     df = prepare_df(raw_df)
